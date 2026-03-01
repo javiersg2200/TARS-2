@@ -9,7 +9,7 @@ from modules.module_tts import play_audio_chunks
 
 CONFIG = load_config()
 
-# Variables Globales
+# Variables Globales (inicializadas por app.py)
 ui_manager = None
 character_manager = None
 memory_manager = None
@@ -27,13 +27,12 @@ def initialize_managers(mem_mgr, char_mgr, stt_mgr, ui_mgr, shutdown_evt, batt_m
     battery_module = batt_mod
     queue_message("SYSTEM: Managers initialized (Turbo Mode).")
 
-def wake_word_callback(wake_response="¿Dígame?"):
+def wake_word_callback(wake_response="¿Sí?"):
     """Respuesta inmediata al detectar la palabra clave"""
     if ui_manager:
         ui_manager.deactivate_screensaver()
         ui_manager.update_data("TARS", wake_response, "TARS")
     
-    # Ejecución asíncrona segura para la Raspberry
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -42,7 +41,7 @@ def wake_word_callback(wake_response="¿Dígame?"):
         loop.close()
 
 def utterance_callback(message):
-    """Procesa el mensaje del usuario con fragmentación para latencia mínima."""
+    """Procesa el mensaje con fragmentación para latencia mínima."""
     if not message: return
     user_text = str(message)
 
@@ -52,10 +51,10 @@ def utterance_callback(message):
     
     queue_message(f"USER: {user_text}")
 
-    # 1. Comandos de Sistema Críticos
+    # 1. Interceptor de Apagado Físico
     cmd = user_text.lower()
     if "apágate" in cmd and "tars" in cmd:
-        if ui_manager: ui_manager.update_data("SYSTEM", "Cerrando sistemas...", "SYSTEM")
+        if ui_manager: ui_manager.update_data("SYSTEM", "Cerrando...", "SYSTEM")
         os.system("sudo shutdown -h now")
         return
 
@@ -65,23 +64,23 @@ def utterance_callback(message):
     full_reply = ""
     sentence_buffer = ""
     
-    # Loop de audio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     try:
+        # Aquí eliminamos los 5 segundos de espera
         for word in respuesta_gen:
             full_reply += word
             sentence_buffer += word
             
-            # Disparamos el audio si hay un signo de puntuación o el buffer es razonable
-            if any(punct in word for punct in ['.', '!', '?', ',', '\n']) or len(sentence_buffer) > 45:
+            # Disparamos el audio en cuanto hay una pausa lógica o el buffer crece
+            if any(punct in word for punct in ['.', '!', '?', ',', '\n']) or len(sentence_buffer) > 40:
                 clean_chunk = sentence_buffer.strip()
                 if clean_chunk:
                     loop.run_until_complete(play_audio_chunks(clean_chunk, "openai"))
                     sentence_buffer = ""
 
-        # Enviar el resto final si queda algo
+        # Enviar el resto final
         if sentence_buffer.strip():
             loop.run_until_complete(play_audio_chunks(sentence_buffer.strip(), "openai"))
 
@@ -89,10 +88,10 @@ def utterance_callback(message):
             ui_manager.update_data("TARS", full_reply.strip(), "TARS")
 
     except Exception as e:
-        queue_message(f"Error en flujo TARS: {e}")
+        queue_message(f"Error en flujo: {e}")
     finally:
         loop.close()
 
 def post_utterance_callback():
-    """Función requerida por app.py para procesos posteriores a la respuesta."""
+    """Función requerida por app.py para procesos posteriores."""
     pass
