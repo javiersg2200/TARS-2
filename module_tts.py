@@ -1,68 +1,60 @@
 #!/usr/bin/env python3
 import os
 import subprocess
-import asyncio
+from openai import OpenAI
 from modules.module_config import load_config
 import modules.tars_status as status 
 
-# Rutas absolutas a los archivos de voz de TARS
-MODEL_PATH = "/home/javiersg/TARS-AI/src/character/TARS/voice/TARS.onnx"
-CONFIG_PATH = "/home/javiersg/TARS-AI/src/character/TARS/voice/TARS.onnx.json"
+CONFIG = load_config()
 
-def limpiar_texto_para_piper(texto):
-    # Piper en inglés crashea con caracteres españoles. Los eliminamos.
-    return texto.replace("¿", "").replace("¡", "")
+def get_openai_client():
+    # Coge la API Key de OpenAI que ya tienes configurada para el cerebro
+    k = CONFIG['TTS'].get('openai_api_key') or CONFIG['LLM'].get('api_key') or os.environ.get("OPENAI_API_KEY")
+    if k: return OpenAI(api_key=k)
+    return None
 
 async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
     if not text: return
+    client = get_openai_client()
     
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(CONFIG_PATH):
-        print(f"❌ TTS ERROR: No encuentro los archivos de voz en /home/javiersg/TARS-AI/src/character/TARS/voice/")
+    if not client:
+        print("❌ TTS ERROR: Falta configurar la API Key de OpenAI.")
         return
 
     try:
         # 1. SEMÁFORO ROJO: Apagamos el oído
         status.is_speaking = True 
-        print(f"⚙️ Generando voz de TARS en local (Piper)...")
+        print(f"⚡ Conectando a OpenAI TTS (Modo Streaming Ultra-Rápido)...")
 
-        texto_limpio = limpiar_texto_para_piper(text)
-
-        # 2. Generar audio con Piper (Usamos python3 -m para evitar errores de PATH)
-        piper_cmd = [
-            "python3", "-m", "piper", 
-            "--model", MODEL_PATH, 
-            "--config", CONFIG_PATH, 
-            "--output_file", "raw_speech.wav"
-        ]
-        
-        proceso = subprocess.run(
-            piper_cmd, 
-            input=texto_limpio.encode('utf-8'), 
-            stdout=subprocess.DEVNULL, 
-            stderr=subprocess.PIPE # Capturamos el error real si falla
+        # 2. Pedimos el audio a OpenAI
+        response = client.audio.speech.create(
+            model="tts-1", # tts-1 está optimizado para velocidad y latencia baja
+            voice="onyx",  # Onyx es una voz muy grave y profunda
+            input=text,
+            response_format="mp3"
         )
 
-        if proceso.returncode != 0:
-            error_msg = proceso.stderr.decode('utf-8')
-            print(f"❌ ERROR PIPER EXACTO: {error_msg}")
-            return
-
-        # 3. CONVERSIÓN CRÍTICA: Forzamos 44100Hz y 2 Canales
-        subprocess.run(
-            "ffmpeg -y -i raw_speech.wav -ar 44100 -ac 2 ready_speech.wav -loglevel quiet", 
-            shell=True
-        )
-
-        # 4. Reproducir
         print(f"🔊 TARS HABLANDO...")
-        subprocess.run("aplay -D default ready_speech.wav -q", shell=True)
+        
+        # 3. Magia Negra de Linux: 
+        # Reproducimos el MP3 al vuelo (-q), forzando 44100Hz (-r 44100) y estéreo (-2)
+        # Esto evita crashes de ALSA y no escribe NADA en la tarjeta SD (latencia cero).
+        cmd = ["mpg123", "-q", "-r", "44100", "-2", "-"]
+        proceso = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+
+        # Inyectamos los trozos de audio al altavoz según nos van llegando de internet
+        for chunk in response.iter_bytes(chunk_size=4096):
+            if chunk:
+                proceso.stdin.write(chunk)
+
+        proceso.stdin.close()
+        proceso.wait()
 
     except Exception as e:
         print(f"❌ TTS ERROR: {e}")
-        await asyncio.sleep(1) 
         
     finally:
-        # 5. SEMÁFORO VERDE: Despertamos el oído
+        # 4. SEMÁFORO VERDE: Despertamos el oído
         print("✅ Fin de frase.")
         status.is_speaking = False
 
