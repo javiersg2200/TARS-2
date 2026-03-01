@@ -9,6 +9,10 @@ import modules.tars_status as status
 MODEL_PATH = "/home/javiersg/TARS-AI/src/character/TARS/voice/TARS.onnx"
 CONFIG_PATH = "/home/javiersg/TARS-AI/src/character/TARS/voice/TARS.onnx.json"
 
+def limpiar_texto_para_piper(texto):
+    # Piper en inglés crashea con caracteres españoles. Los eliminamos.
+    return texto.replace("¿", "").replace("¡", "")
+
 async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
     if not text: return
     
@@ -21,9 +25,11 @@ async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
         status.is_speaking = True 
         print(f"⚙️ Generando voz de TARS en local (Piper)...")
 
-        # 2. Generar audio con Piper
+        texto_limpio = limpiar_texto_para_piper(text)
+
+        # 2. Generar audio con Piper (Usamos python3 -m para evitar errores de PATH)
         piper_cmd = [
-            "piper", 
+            "python3", "-m", "piper", 
             "--model", MODEL_PATH, 
             "--config", CONFIG_PATH, 
             "--output_file", "raw_speech.wav"
@@ -31,13 +37,14 @@ async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
         
         proceso = subprocess.run(
             piper_cmd, 
-            input=text.encode('utf-8'), 
+            input=texto_limpio.encode('utf-8'), 
             stdout=subprocess.DEVNULL, 
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.PIPE # Capturamos el error real si falla
         )
 
         if proceso.returncode != 0:
-            print("❌ ERROR: Fallo al generar la voz con Piper.")
+            error_msg = proceso.stderr.decode('utf-8')
+            print(f"❌ ERROR PIPER EXACTO: {error_msg}")
             return
 
         # 3. CONVERSIÓN CRÍTICA: Forzamos 44100Hz y 2 Canales
