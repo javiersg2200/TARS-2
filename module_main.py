@@ -2,7 +2,6 @@
 import os
 import re
 import asyncio
-import random
 import subprocess
 from modules.module_config import load_config
 from modules.module_messageQue import queue_message
@@ -12,44 +11,18 @@ import modules.tars_status as status
 
 CONFIG = load_config()
 
-# === Configuración de Muletillas ===
-FILLER_DIR = "/home/javiersg/TARS-AI/src/assets/fillers/"
-
 # Variables Globales
 ui_manager = None
 stt_manager = None
-
-def play_local_filler():
-    """
-    Reproduce un archivo de audio local de forma instantánea 
-    usando un proceso independiente (Popen) para no bloquear el sistema.
-    """
-    try:
-        if not os.path.exists(FILLER_DIR):
-            return
-            
-        archivos = [f for f in os.listdir(FILLER_DIR) if f.endswith((".mp3", ".wav"))]
-        if archivos:
-            archivo = random.choice(archivos)
-            ruta = os.path.join(FILLER_DIR, archivo)
-            
-            # Usamos mpg123 para MP3 o aplay para WAV. 
-            # -q es modo quiet (sin logs innecesarios)
-            if archivo.endswith(".mp3"):
-                subprocess.Popen(["mpg123", "-q", ruta])
-            else:
-                subprocess.Popen(["aplay", "-q", ruta])
-    except Exception as e:
-        print(f"⚠️ Error al disparar muletilla local: {e}")
 
 def initialize_managers(mem_mgr, char_mgr, stt_mgr, ui_mgr, shutdown_evt, batt_mod):
     global ui_manager, stt_manager
     ui_manager = ui_mgr
     stt_manager = stt_mgr
-    queue_message("SYSTEM: Managers initialized (Solid Speech Mode).")
+    queue_message("SYSTEM: Managers initialized (Solid Mode).")
 
 def wake_word_callback(wake_response="¿Sí?"):
-    """Respuesta inmediata al detectar la palabra clave (TARS)"""
+    """Respuesta inmediata al detectar 'TARS'"""
     if status.is_speaking: return
     
     if ui_manager:
@@ -64,7 +37,8 @@ def wake_word_callback(wake_response="¿Sí?"):
 
 def utterance_callback(message):
     """
-    Lógica principal: Muletilla local -> Procesado completo -> Respuesta sólida.
+    Procesado en bloque: Escucha -> Procesa todo -> Habla todo.
+    Evita entrecortes y asegura una entonación natural.
     """
     if not message or status.is_speaking:
         return
@@ -75,42 +49,37 @@ def utterance_callback(message):
     
     queue_message(f"USER: {user_text}")
 
-    # 1. COMANDO DE APAGADO (Prioridad)
+    # 1. COMANDO DE APAGADO
     cmd = user_text.lower()
     if "apágate" in cmd and "tars" in cmd:
-        asyncio.run(play_audio_chunks("Secuencia de apagado. Hasta la próxima, piloto.", "openai"))
+        asyncio.run(play_audio_chunks("Entendido. Cerrando sistemas.", "openai"))
         os.system("sudo shutdown -h now")
         return
 
-    # 2. DISPARAR MULETILLA LOCAL (Latencia 0)
-    # Esto suena inmediatamente mientras el cerebro empieza a trabajar
-    play_local_filler()
-
     try:
+        # Bloqueamos el micrófono para que TARS no se escuche a sí mismo
         status.is_speaking = True
         
-        # 3. GENERAR RESPUESTA COMPLETA
-        # Obtenemos el generador y lo vaciamos en una lista para tener el bloque de texto
+        # 2. GENERAR RESPUESTA COMPLETA (Sin streaming entre frases)
+        # Esperamos a que el cerebro termine el párrafo
         respuesta_gen = process_completion(user_text)
         full_reply = "".join(list(respuesta_gen))
         
-        # Limpieza de etiquetas de pensamiento o basura visual
+        # Limpieza de etiquetas de pensamiento
         full_reply = re.sub(r"<think>.*?</think>", "", full_reply, flags=re.DOTALL).strip()
 
-        # 4. MOSTRAR EN PANTALLA Y HABLAR (Bloque sólido)
+        # 3. MOSTRAR Y HABLAR
         if ui_manager:
             ui_manager.update_data("TARS", full_reply, "TARS")
         
-        # Enviamos el párrafo entero para que la entonación sea perfecta
+        # Enviamos el párrafo entero para máxima calidad de voz
         asyncio.run(play_audio_chunks(full_reply, "openai"))
 
     except Exception as e:
-        queue_message(f"Error procesando flujo: {e}")
-        print(f"❌ Error: {e}")
+        queue_message(f"Error en flujo: {e}")
     finally:
-        # Liberamos el micrófono para la siguiente frase
+        # Abrimos el oído de nuevo
         status.is_speaking = False
 
 def post_utterance_callback():
-    """Función para evitar errores de importación en app.py"""
     pass
