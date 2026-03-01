@@ -1,75 +1,67 @@
 #!/usr/bin/env python3
 import os
 import subprocess
+import aiohttp
 import asyncio
-from openai import OpenAI
 from modules.module_config import load_config
 import modules.tars_status as status 
 
 CONFIG = load_config()
 
-def get_openai_client():
-    # Usamos getattr() porque CONFIG['TTS'] es un objeto, no un diccionario
-    tts_conf = CONFIG['TTS']
-    api_key = getattr(tts_conf, 'openai_api_key', None)
-    
-    # Si no la encuentra ahí, probamos en la sección del Cerebro (LLM)
-    if not api_key:
-        try:
-            llm_conf = CONFIG['LLM']
-            api_key = getattr(llm_conf, 'api_key', None)
-        except:
-            pass
-            
-    # Último intento: Variables de entorno del sistema
-    if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        
-    if api_key:
-        return OpenAI(api_key=api_key)
-        
-    return None
+# === TUS DATOS DE ELEVENLABS ===
+ELEVENLABS_API_KEY = "sk_820f5d255c84e9a86df0b87b339a51b7b14f9405414ad158"
+# Usamos a Adam (voz predeterminada gratuita) para descartar el error 402 por voces premium/clonadas
+ELEVENLABS_VOICE_ID = "pNInz6obbfdqIqc9lrm0" 
+# ===============================
 
 async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
     if not text: return
-    client = get_openai_client()
     
-    if not client:
-        print("❌ TTS ERROR: No encuentro la API Key de OpenAI.")
+    if not ELEVENLABS_API_KEY or ELEVENLABS_API_KEY == "PON_TU_API_KEY_AQUI":
+        print("❌ TTS ERROR: Falta configurar la API Key de ElevenLabs.")
         return
 
     try:
-        # 1. SEMÁFORO ROJO: Apagamos el oído
         status.is_speaking = True 
-        print(f"⚡ Conectando a OpenAI TTS (Modo Streaming)...")
+        print(f"⚡ Conectando a ElevenLabs (Modo Streaming)...")
 
-        # 2. Pedimos el audio a OpenAI
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice="onyx",
-            input=text,
-            response_format="mp3"
-        )
-
-        print(f"🔊 TARS HABLANDO...")
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream"
+        headers = {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json"
+        }
         
-        # 3. Magia Negra de Linux para reproducir al vuelo sin latencia
-        cmd = ["mpg123", "-q", "-r", "44100", "-2", "-"]
+        payload = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "output_format": "mp3_44100_128",
+            "optimize_streaming_latency": 3
+        }
+
+        cmd = ["mpg123", "-q", "-"]
         proceso = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
-        for chunk in response.iter_bytes(chunk_size=4096):
-            if chunk:
-                proceso.stdin.write(chunk)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    error_txt = await response.text()
+                    print(f"❌ ERROR ElevenLabs {response.status}: {error_txt}")
+                    await asyncio.sleep(1) 
+                    return
+                
+                print(f"🔊 TARS HABLANDO...")
+                async for chunk in response.content.iter_chunked(4096):
+                    if chunk:
+                        proceso.stdin.write(chunk)
 
         proceso.stdin.close()
         proceso.wait()
 
     except Exception as e:
         print(f"❌ TTS ERROR: {e}")
-        await asyncio.sleep(1) 
+        await asyncio.sleep(1)
         
     finally:
-        # 4. SEMÁFORO VERDE: Despertamos el oído
         print("✅ Fin de frase.")
         status.is_speaking = False
 
