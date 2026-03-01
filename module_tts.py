@@ -11,7 +11,7 @@ CONFIG = load_config()
 # === TUS DATOS DE ELEVENLABS ===
 ELEVENLABS_API_KEY = "sk_820f5d255c84e9a86df0b87b339a51b7b14f9405414ad158"
 # Usamos a Adam (voz predeterminada gratuita) para descartar el error 402 por voces premium/clonadas
-ELEVENLABS_VOICE_ID = "pNInz6obbfdqIqc9lrm0" 
+ELEVENLABS_VOICE_ID = "Vpv1YgvVd6CHIzOTiTt8" 
 # ===============================
 
 async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
