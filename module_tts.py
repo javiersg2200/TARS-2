@@ -1,67 +1,61 @@
 #!/usr/bin/env python3
 import os
 import subprocess
-import aiohttp
 import asyncio
 from modules.module_config import load_config
 import modules.tars_status as status 
 
-CONFIG = load_config()
-
-# === TUS DATOS DE ELEVENLABS ===
-ELEVENLABS_API_KEY = "sk_820f5d255c84e9a86df0b87b339a51b7b14f9405414ad158"
-ELEVENLABS_VOICE_ID = "NDeNvFOosDh4L0JoDYIq" 
-# ===============================
+# Rutas absolutas a los archivos de voz de TARS
+MODEL_PATH = "/home/javiersg/TARS-AI/src/character/TARS/voice/TARS.onnx"
+CONFIG_PATH = "/home/javiersg/TARS-AI/src/character/TARS/voice/TARS.onnx.json"
 
 async def play_audio_chunks(text, tts_option=None, is_wakeword=False):
     if not text: return
     
-    if not ELEVENLABS_API_KEY or ELEVENLABS_API_KEY == "tu_api_key_aqui":
-        print("❌ TTS ERROR: Falta configurar la API Key de ElevenLabs.")
+    if not os.path.exists(MODEL_PATH) or not os.path.exists(CONFIG_PATH):
+        print(f"❌ TTS ERROR: No encuentro los archivos de voz en /home/javiersg/TARS-AI/src/character/TARS/voice/")
         return
 
     try:
         # 1. SEMÁFORO ROJO: Apagamos el oído
         status.is_speaking = True 
-        print(f"⚡ Conectando a ElevenLabs (Modo Ultra-Rápido)...")
+        print(f"⚙️ Generando voz de TARS en local (Piper)...")
 
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream"
-        headers = {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json"
-        }
+        # 2. Generar audio con Piper
+        piper_cmd = [
+            "piper", 
+            "--model", MODEL_PATH, 
+            "--config", CONFIG_PATH, 
+            "--output_file", "raw_speech.wav"
+        ]
         
-        payload = {
-            "text": text,
-            "model_id": "eleven_multilingual_v2",
-            "output_format": "mp3_44100_128",
-            "optimize_streaming_latency": 3 # ¡Esto es lo que quita el retraso!
-        }
+        proceso = subprocess.run(
+            piper_cmd, 
+            input=text.encode('utf-8'), 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL
+        )
 
-        # Lanzamos el reproductor mpg123 preparado para recibir el audio
-        cmd = ["mpg123", "-q", "-"]
-        proceso = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        if proceso.returncode != 0:
+            print("❌ ERROR: Fallo al generar la voz con Piper.")
+            return
 
-        # Descargamos e inyectamos el audio al altavoz a la vez
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                if response.status != 200:
-                    print(f"❌ ERROR ElevenLabs: {response.status}")
-                    return
-                
-                print(f"🔊 TARS HABLANDO...")
-                async for chunk in response.content.iter_chunked(4096):
-                    if chunk:
-                        proceso.stdin.write(chunk)
+        # 3. CONVERSIÓN CRÍTICA: Forzamos 44100Hz y 2 Canales
+        subprocess.run(
+            "ffmpeg -y -i raw_speech.wav -ar 44100 -ac 2 ready_speech.wav -loglevel quiet", 
+            shell=True
+        )
 
-        proceso.stdin.close()
-        proceso.wait()
+        # 4. Reproducir
+        print(f"🔊 TARS HABLANDO...")
+        subprocess.run("aplay -D default ready_speech.wav -q", shell=True)
 
     except Exception as e:
         print(f"❌ TTS ERROR: {e}")
+        await asyncio.sleep(1) 
         
     finally:
-        # 2. SEMÁFORO VERDE: Despertamos el oído
+        # 5. SEMÁFORO VERDE: Despertamos el oído
         print("✅ Fin de frase.")
         status.is_speaking = False
 
